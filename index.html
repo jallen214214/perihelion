@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Perihelion</title>
+<meta name="description" content="A one-button orbit game. Hop between orbits, chain motes, chart seven star systems.">
+<meta name="theme-color" content="#0a0918">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Perihelion">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Tilt+Warp&family=Martian+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one full-bleed canvas (the orbital system) with a thin HUD and a single centered flight panel. Deliberately single-theme: deep space. */
+:root {
+  --void: #0a0918;
+  --void-2: #15112e;
+  --ink: #f3eefe;
+  --ink-dim: #a49cc7;
+  --sol: #ffb347;
+  --mote: #7fe3ff;
+  --rock: #ff5d5d;
+  --line: rgba(243, 238, 254, 0.14);
+  --line-2: rgba(243, 238, 254, 0.28);
+  --font-display: "Tilt Warp", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-size: 14px; overscroll-behavior: none; }
+.install-hint { font-size: 11px; }
+[hidden] { display: none !important; }
+body {
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+.hud {
+  position: fixed; inset: 0 0 auto 0; z-index: 2;
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.hud.idle .live { visibility: hidden; }
+.score { font-family: var(--font-display); font-size: clamp(30px, 7vw, 46px); line-height: 1; letter-spacing: 0.01em; }
+.sub { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
+.chip { padding: 3px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink); transition: transform .12s, background .2s; }
+.chip.hot { background: var(--sol); color: var(--void); border-color: transparent; }
+.right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.best { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
+.best b { color: var(--ink); font-weight: 600; font-size: 14px; display: block; letter-spacing: 0; margin-top: 2px; }
+.icon-btn {
+  pointer-events: auto; font: inherit; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  background: transparent; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 99px; padding: 5px 10px; cursor: pointer;
+}
+.icon-btn:hover { color: var(--ink); }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--mote); outline-offset: 2px; }
+
+.panel-wrap {
+  position: fixed; inset: 0; z-index: 3; display: grid; place-items: center;
+  padding-top: calc(56px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  pointer-events: none;
+}
+.panel {
+  pointer-events: auto;
+  width: min(400px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: color-mix(in srgb, var(--void-2) 84%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line); border-radius: 18px;
+  padding: 20px 20px 18px;
+  display: flex; flex-direction: column; gap: 14px;
+  text-align: center;
+  animation: rise .35s cubic-bezier(.2,.9,.3,1.2);
+  scrollbar-width: thin;
+}
+@keyframes rise { from { transform: translateY(14px) scale(.97); opacity: .4; } to { transform: none; opacity: 1; } }
+.panel h1 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: clamp(34px, 9vw, 44px); line-height: .95; text-wrap: balance; letter-spacing: 0.01em; }
+.panel h1 span { color: var(--sol); }
+.panel h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 22px; line-height: 1.1; text-wrap: balance; }
+.panel p { margin: 0; color: var(--ink-dim); font-size: 12px; line-height: 1.65; }
+.panel p b { color: var(--ink); font-weight: 600; }
+.kicker { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-dim); }
+.big { font-family: var(--font-display); font-size: 64px; line-height: 1; font-variant-numeric: tabular-nums; }
+.newbest { display: inline-block; align-self: center; background: var(--sol); color: var(--void); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; padding: 4px 10px; border-radius: 99px; animation: pulse 0.9s ease-in-out infinite alternate; }
+@keyframes pulse { to { transform: scale(1.08); } }
+
+.rank { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.rank-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 11px; color: var(--ink-dim); }
+.rank-row b { font-family: var(--font-display); font-weight: 400; font-size: 15px; color: var(--ink); letter-spacing: .02em; }
+.progress { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.progress div { height: 100%; background: var(--mote); border-radius: 99px; transition: width .8s cubic-bezier(.2,.8,.2,1); }
+.progress.sol div { background: var(--sol); }
+
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; }
+.tab { font: 600 11px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; padding: 9px 6px; border-radius: 9px; border: 0; background: transparent; color: var(--ink-dim); cursor: pointer; }
+.tab.on { background: var(--ink); color: var(--void); }
+
+.chart { position: relative; display: flex; justify-content: space-between; gap: 4px; padding: 2px 2px 0; }
+.chart::before { content: ""; position: absolute; left: 22px; right: 22px; top: 21px; height: 1px; background: var(--line-2); }
+.node { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); }
+.node .n { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--void-2); border: 1.5px solid var(--line-2); font: 600 12px var(--font-mono); transition: transform .15s; }
+.node.on .n { background: var(--sol); color: var(--void); border-color: var(--sol); transform: scale(1.08); }
+.node.locked .n { color: var(--ink-dim); border-style: dashed; font-size: 9px; }
+.node.done .n { border-color: var(--sol); }
+.pips { display: flex; gap: 3px; }
+.pips i { width: 5px; height: 5px; border-radius: 50%; background: var(--line-2); }
+.pips i.got { background: var(--sol); }
+
+.sys { display: flex; flex-direction: column; gap: 10px; text-align: left; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.sys-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.goals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: 11.5px; }
+.goals li { display: flex; align-items: center; gap: 9px; color: var(--ink); }
+.goals li i { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; font-style: normal; font-size: 9px; }
+.goals li.done { color: var(--ink-dim); text-decoration: line-through; text-decoration-color: var(--line-2); }
+.goals li.done i { background: var(--sol); border-color: var(--sol); color: var(--void); }
+.goals li.done i::before { content: "★"; }
+.goals.fresh li { text-decoration: none; color: var(--sol); font-weight: 600; justify-content: center; }
+.lockmsg { border-top: 1px dashed var(--line); padding-top: 10px; }
+
+.parts { display: flex; flex-direction: column; gap: 8px; }
+.part-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.part { font: 600 10px var(--font-mono); letter-spacing: .04em; padding: 9px 2px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
+.part.on { border-color: var(--mote); background: color-mix(in srgb, var(--mote) 16%, transparent); }
+.part.locked { color: var(--ink-dim); border-style: dashed; }
+.part-desc { font-size: 11px; color: var(--ink-dim); min-height: 2.6em; line-height: 1.5; }
+
+.bars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: end; height: 76px; }
+.bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 100%; }
+.bar div { width: 100%; border-radius: 4px 4px 2px 2px; background: var(--line-2); min-height: 2px; }
+.bar.today div { background: var(--sol); }
+.bar small { font-size: 9px; color: var(--ink-dim); }
+.bar.today small { color: var(--ink); font-weight: 600; }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { border: 1px solid var(--line); border-radius: 10px; padding: 8px 4px; font-variant-numeric: tabular-nums; }
+.stat b { display: block; font-size: 16px; font-weight: 600; }
+.stat small { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); }
+.notes { display: flex; flex-direction: column; gap: 6px; }
+.note { font-size: 11.5px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--sol) 14%, transparent); color: var(--ink); border: 1px solid color-mix(in srgb, var(--sol) 40%, transparent); }
+.note b { color: var(--sol); }
+
+details.trails { text-align: left; border-top: 1px solid var(--line); padding-top: 10px; }
+details.trails summary { cursor: pointer; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-dim); list-style: none; display: flex; justify-content: space-between; }
+details.trails summary::-webkit-details-marker { display: none; }
+details.trails summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+details.trails[open] summary::after { content: "–"; }
+.trail-body { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; text-align: center; }
+.trail-row { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; }
+.sw {
+  width: 38px; height: 38px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0;
+  position: relative; background: var(--void); display: grid; place-items: center;
+  font: 600 8px var(--font-mono); color: var(--ink-dim);
+}
+.sw .dot { width: 14px; height: 14px; border-radius: 50%; }
+.sw.on { border-color: var(--ink); }
+.sw.locked .dot { opacity: .2; }
+.sw.locked span { position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); white-space: nowrap; }
+.unlock-note { font-size: 11px; color: var(--ink-dim); }
+.unlock-note b { color: var(--ink); font-weight: 600; }
+
+.btns { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.btns.two { grid-template-columns: 1.4fr 1fr; }
+.btn { font: 400 17px var(--font-display); letter-spacing: .02em; padding: 13px 10px; border-radius: 12px; border: 1px solid var(--line-2); background: transparent; color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--sol); color: var(--void); border-color: var(--sol); }
+.btn:disabled { opacity: .35; cursor: default; }
+.keys { font-size: 10px; color: var(--ink-dim); letter-spacing: .06em; }
+@media (prefers-reduced-motion: reduce) {
+  .panel, .newbest { animation: none; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="c" aria-label="Perihelion game field"></canvas>
+
+<div class="hud idle" id="hud">
+  <div class="live">
+    <div class="score" id="score">0</div>
+    <div class="sub"><span class="chip" id="mult">×1</span><span id="where">Sector 1</span></div>
+  </div>
+  <div class="right">
+    <div class="best live">Best<b id="best">0</b></div>
+    <button class="icon-btn" id="mute" type="button">Sound on</button>
+  </div>
+</div>
+
+<div class="panel-wrap" id="panelWrap">
+  <div class="panel" id="panel"></div>
+</div>
+
+<script>
+(() => {
+  // ================= data =================
+  const SYSTEMS = [
+    { name: 'Sol Minor', hue: 255, need: 0, cfg: { lanes: 2 },
+      rule: 'Two orbits around a small sun. Where every pilot starts.',
+      goals: [{ t: 'sector', n: 3 }, { t: 'motes', n: 30 }, { t: 'closes', n: 5 }] },
+    { name: 'Twin Lanterns', hue: 205, need: 2, cfg: { lanes: 2, braid: true },
+      rule: 'A binary star braids the two orbits. They cross four times a lap, so inner and outer keep trading places.',
+      goals: [{ t: 'sector', n: 3 }, { t: 'streak', n: 18 }, { t: 'score', n: 1500 }] },
+    { name: 'Triad', hue: 160, need: 4, cfg: { lanes: 3 },
+      rule: 'Three orbits. Each tap moves you one orbit outward, and the outermost wraps back to the inner.',
+      goals: [{ t: 'sector', n: 3 }, { t: 'motes', n: 40 }, { t: 'closes', n: 8 }] },
+    { name: 'Comet Reach', hue: 18, need: 7, cfg: { lanes: 2, comets: true },
+      rule: 'Comets dive inward across every orbit. Judge where they will be when you arrive.',
+      goals: [{ t: 'sector', n: 4 }, { t: 'streak', n: 24 }, { t: 'score', n: 3000 }] },
+    { name: 'Retrograde', hue: 330, need: 10, cfg: { lanes: 2, retro: true },
+      rule: 'Rocks drift against your orbit and close in faster than they look.',
+      goals: [{ t: 'sector', n: 4 }, { t: 'motes', n: 60 }, { t: 'closes', n: 12 }] },
+    { name: 'Umbra', hue: 285, need: 13, cfg: { lanes: 2, eclipse: true },
+      rule: 'An eclipse darkens a slice of the ring. Read the orbit ahead and remember it.',
+      goals: [{ t: 'sector', n: 4 }, { t: 'streak', n: 30 }, { t: 'score', n: 5000 }] },
+    { name: 'Heliopause', hue: 42, need: 16, cfg: { lanes: 2, braid: true, comets: true, eclipse: true },
+      rule: 'Braided orbits, diving comets and an eclipse at once. The edge of the chart.',
+      goals: [{ t: 'sector', n: 5 }, { t: 'motes', n: 80 }, { t: 'score', n: 6000 }] },
+  ];
+  const PARTS = [
+    { id: 'none', name: 'Standard', need: 0, desc: 'Factory spark. No trade-offs.' },
+    { id: 'magnet', name: 'Magnet', need: 3, desc: 'Pulls in motes from every orbit, but rocks hit from wider.' },
+    { id: 'overclock', name: 'Overclock', need: 6, desc: 'Multiplier starts at ×2 and tops out at ×9. You fly 20% faster.' },
+    { id: 'ballast', name: 'Ballast', need: 9, desc: 'Hops are sluggish, but you get a fresh shield every sector.' },
+  ];
+  const TRAILS = [
+    { name: 'Ember', cost: 0, col: '#ffb347' },
+    { name: 'Glacier', cost: 150, col: '#7fe3ff' },
+    { name: 'Venom', cost: 400, col: '#9dff6a' },
+    { name: 'Orchid', cost: 900, col: '#e48bff' },
+    { name: 'Prism', cost: 2000, col: 'prism' },
+  ];
+  const RANKS = [['Drifter', 0], ['Spark', 1500], ['Navigator', 6000], ['Comet Rider', 20000], ['Sunskimmer', 50000], ['Helion', 120000], ['Perihelion', 250000]];
+  const TIPS = [
+    'Hop off a rock’s orbit at the last instant for a close-call bonus.',
+    'Missing a mote resets your streak. Greed pays.',
+    'Every 6 motes in a row adds ×1 to your multiplier.',
+    'A golden shield absorbs one rock.',
+    'Three stars on a system mark it as mastered on the chart.',
+    'Parts are trade-offs. Ballast is a lifesaver in Comet Reach.',
+    'The daily orbit is the same course for everyone today. Send a friend the link.',
+  ];
+
+  // ================= save =================
+  const SAVE_KEY = 'perihelion.save2';
+  const oldGet = (k, d) => { try { const v = localStorage.getItem('perihelion.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
+  let save = null;
+  try { save = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) {}
+  if (!save || typeof save !== 'object') {
+    save = { bank: oldGet('bank', 0), trail: oldGet('trail', 0), muted: oldGet('muted', false), runs: oldGet('runs', 0),
+      life: 0, sys: {}, part: 'none', sel: 0, mode: 'chart', daily: {} };
+    const ob = oldGet('best', 0);
+    if (ob) save.sys[0] = { best: ob, goals: [false, false, false] };
+  }
+  for (const [k, d] of Object.entries({ bank: 0, trail: 0, muted: false, runs: 0, life: 0, sys: {}, part: 'none', sel: 0, mode: 'chart', daily: {} }))
+    if (save[k] === undefined) save[k] = d;
+  function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
+  const sysSave = i => (save.sys[i] ||= { best: 0, goals: [false, false, false] });
+  const totalStars = () => SYSTEMS.reduce((n, _, i) => n + sysSave(i).goals.filter(Boolean).length, 0);
+  if (!TRAILS[save.trail] || TRAILS[save.trail].cost > save.bank) save.trail = 0;
+  { const p = PARTS.find(p => p.id === save.part); if (!p || p.need > totalStars()) save.part = 'none'; }
+  if (SYSTEMS[save.sel].need > totalStars()) save.sel = 0;
+
+  const rankOf = life => { let i = 0; RANKS.forEach((r, j) => { if (life >= r[1]) i = j; }); return i; };
+
+  // ================= daily =================
+  const pad = n => String(n).padStart(2, '0');
+  const dayKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const todayKey = () => dayKey(new Date());
+  function hashStr(s) { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+  function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const dailySys = k => hashStr('system:' + k) % SYSTEMS.length;
+
+  const goalLabel = gl => ({
+    sector: `Reach Sector ${gl.n}`,
+    motes: `Collect ${gl.n} motes in one run`,
+    closes: `Make ${gl.n} close calls in one run`,
+    streak: `Chain ${gl.n} motes in a row`,
+    score: `Score ${gl.n.toLocaleString()} in one run`,
+  })[gl.t];
+
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ================= audio =================
+  let ac = null;
+  function tone(f, d = 0.08, type = 'sine', vol = 0.12, slide = 0, delay = 0) {
+    if (save.muted) return;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === 'suspended') ac.resume();
+      const t0 = ac.currentTime + delay;
+      const o = ac.createOscillator(), gn = ac.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t0);
+      if (slide) o.frequency.exponentialRampToValueAtTime(f * slide, t0 + d);
+      gn.gain.setValueAtTime(0.0001, t0);
+      gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.005);
+      gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(gn).connect(ac.destination);
+      o.start(t0); o.stop(t0 + d + 0.03);
+    } catch (e) {}
+  }
+  const PENTA = [0, 2, 4, 7, 9];
+  const noteFreq = i => 392 * Math.pow(2, (PENTA[i % 5] + 12 * Math.floor(i / 5)) / 12);
+  const sfx = {
+    flip: () => tone(220, 0.05, 'triangle', 0.06, 1.6),
+    warp: () => tone(700, 0.12, 'sine', 0.07, 0.4),
+    mote: s => tone(noteFreq(Math.min(s, 14)), 0.12, 'sine', 0.13),
+    close: () => { tone(660, 0.08, 'square', 0.05); tone(990, 0.1, 'square', 0.05, 0, 0.06); },
+    star: () => [0, 4, 7, 12].forEach((n, i) => tone(523 * Math.pow(2, n / 12), 0.16, 'triangle', 0.1, 0, i * 0.05)),
+    shield: () => tone(300, 0.3, 'sawtooth', 0.08, 0.3),
+    die: () => { tone(180, 0.6, 'sawtooth', 0.12, 0.15); tone(90, 0.7, 'sine', 0.15, 0.4); },
+    lost: () => tone(300, 0.18, 'triangle', 0.06, 0.6),
+    level: () => [0, 7, 12].forEach((n, i) => tone(330 * Math.pow(2, n / 12), 0.2, 'sine', 0.09, 0, i * 0.08)),
+    best: () => [0, 4, 7, 11, 14].forEach((n, i) => tone(440 * Math.pow(2, n / 12), 0.2, 'triangle', 0.08, 0, i * 0.07)),
+    goal: () => [0, 7, 12, 19].forEach((n, i) => tone(392 * Math.pow(2, n / 12), 0.22, 'triangle', 0.09, 0, i * 0.06)),
+    click: () => tone(600, 0.06, 'triangle', 0.07),
+    nope: () => tone(160, 0.12, 'square', 0.04),
+  };
+
+  // ================= canvas & geometry =================
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  let W, H, CX, CY, S, M;
+  function resize() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    M = Math.min(W, H * 0.92);
+    S = M / 600;
+    CX = W / 2; CY = H / 2 + Math.min(30, H * 0.03);
+  }
+  addEventListener('resize', resize); resize();
+
+  let view = { cfg: SYSTEMS[0].cfg, hue: SYSTEMS[0].hue };
+  function laneR(l, a) {
+    const c = view.cfg;
+    if (c.braid) { const mid = M * 0.30, half = M * 0.075; return mid + (l ? 1 : -1) * half * Math.cos(2 * a); }
+    return c.lanes === 3 ? M * [0.17, 0.285, 0.40][l] : M * [0.23, 0.37][l];
+  }
+  function radiusAt(p, a) {
+    const NL = view.cfg.lanes;
+    const i = Math.max(0, Math.min(NL - 2, Math.floor(p)));
+    const r0 = laneR(i, a), r1 = laneR(i + 1, a);
+    return r0 + (r1 - r0) * (p - i);
+  }
+  const pos = (a, r) => [CX + Math.cos(a - Math.PI / 2) * r, CY + Math.sin(a - Math.PI / 2) * r];
+
+  const stars = Array.from({ length: 160 }, () => ({ a: Math.random() * Math.PI * 2, d: Math.sqrt(Math.random()) * 1.1, s: Math.random() * 1.4 + 0.3, tw: Math.random() * 6 }));
+
+  // ================= state =================
+  let state = 'menu';     // menu | play | dying | over
+  let g = null, lastRun = null, overAt = 0, clock = 0, shake = 0, timeScale = 1, flash = 0;
+  const parts = [], texts = [];
+  const demo = { ang: 0, p: 0, lane: 0, hist: [], nextFlip: 1.2 };
+  const WMAX = 4.1, RETRO = 0.45, COMET_V = 1.3;
+
+  function selectedSystem() { return save.mode === 'daily' ? dailySys(todayKey()) : save.sel; }
+
+  function newGame() {
+    const daily = save.mode === 'daily';
+    const si = selectedSystem();
+    const sys = SYSTEMS[si];
+    const part = daily ? 'none' : save.part;
+    const dk = todayKey();
+    g = {
+      mode: daily ? 'daily' : 'chart', dayKey: dk, sysIndex: si, sys, cfg: sys.cfg, part,
+      rng: daily ? mulberry32(hashStr('course:' + dk)) : Math.random,
+      spd: part === 'overclock' ? 1.2 : 1, hopK: part === 'ballast' ? 9 : 20, baseMult: part === 'overclock' ? 2 : 1,
+      ang: -0.2, lane: 0, p: 0, w: 1.75, time: 0, score: 0, streak: 0, maxStreak: 0,
+      motes: 0, closes: 0, level: 1, maxMult: 1,
+      best: daily ? (save.daily[dk] || 0) : sysSave(si).best, beatBest: false,
+      lastSwitch: -9, fromLane: 0, shield: part === 'ballast', invuln: 0,
+      objs: [], cursor: Math.PI * 0.55, hist: [], newGoals: [],
+      starsBefore: totalStars(), bankBefore: save.bank, rankBefore: rankOf(save.life),
+    };
+    g.mult = g.baseMult;
+    view = { cfg: sys.cfg, hue: sys.hue };
+  }
+
+  // ================= spawning =================
+  function addObj(a, lane, type, extra) {
+    if (g.cfg.braid && Math.abs(Math.cos(2 * a)) < 0.32) return; // keep crossings clear
+    g.objs.push(Object.assign({ a, lane, type, done: false, spin: g.rng() * 6, pop: 0 }, extra));
+  }
+  function spawnPattern() {
+    const c = g.cfg, NL = c.lanes, R = g.rng, lvl = g.level;
+    const wp = Math.min(WMAX * g.spd, g.w + 0.35) + (c.retro ? RETRO : 0);
+    const sec = s => s * wp;
+    const other = l => (l + 1 + Math.floor(R() * (NL - 1))) % NL;
+    let a = g.cursor;
+    const L = Math.floor(R() * NL);
+    const r = R();
+    if (c.comets && r < 0.24) {
+      const tPass = g.time + (a - g.ang) / Math.max(0.5, g.w);
+      addObj(a, 0, 'comet', { lp0: -0.25 + R() * (NL - 1 + 0.5), tPass });
+      if (R() < 0.6) addObj(a + sec(0.35), L, 'mote');
+      a += sec(0.55);
+    } else if (r < 0.29 && !g.shield && g.time > 8 && R() < 0.2) {
+      addObj(a, L, 'star'); addObj(a, other(L), 'rock'); a += sec(0.3);
+    } else if (r < 0.40) {
+      const n = 4 + Math.floor(R() * 4);
+      for (let i = 0; i < n; i++) addObj(a + sec(0.1 * i), L, 'mote');
+      a += sec(0.1 * n);
+    } else if (r < 0.55) {
+      addObj(a, L, 'rock'); addObj(a, other(L), 'mote'); a += sec(0.2);
+    } else if (NL === 3 && r < 0.68) {
+      a += sec(0.3);
+      for (let l = 0; l < NL; l++) addObj(a, l, l === L ? 'mote' : 'rock');
+      a += sec(0.25);
+    } else if (r < 0.82) {
+      const n = 3 + Math.min(5, lvl);
+      const gap = Math.max(0.38, 0.72 - lvl * 0.055);
+      let l = L;
+      for (let i = 0; i < n; i++) { const nx = other(l); addObj(a, l, 'rock'); addObj(a, nx, 'mote'); a += sec(gap); l = nx; }
+    } else {
+      const n = 3 + Math.min(4, lvl >> 1);
+      const safe = other(L);
+      for (let i = 0; i < n; i++) {
+        addObj(a + sec(0.15 * i), L, 'rock');
+        if (i % 2 === 0) addObj(a + sec(0.15 * i), safe, 'mote');
+      }
+      a += sec(0.15 * n);
+    }
+    g.cursor = a + sec(Math.max(0.36, 0.7 - lvl * 0.045));
+  }
+  const cometLp = o => o.lp0 + COMET_V * (o.tPass - g.time);
+
+  // ================= fx =================
+  function burst(x, y, col, n, spd, size = 2.2) {
+    if (reduceMotion) n = Math.ceil(n / 2);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = (0.3 + Math.random()) * spd * S;
+      parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0, max: 0.4 + Math.random() * 0.5, col, size: size * (0.6 + Math.random()) });
+    }
+  }
+  function floatText(x, y, text, col, big = false) { texts.push({ x, y, text, col, life: 0, big }); }
+  function addShake(v) { if (!reduceMotion) shake = Math.max(shake, v); }
+  function trailColor(i) {
+    const t = TRAILS[save.trail];
+    return t.col === 'prism' ? `hsl(${(clock * 160 + i * 18) % 360} 100% 65%)` : t.col;
+  }
+
+  // ================= input =================
+  function hop() {
+    const NL = g.cfg.lanes;
+    g.fromLane = g.lane;
+    if (NL === 2) { g.lane = 1 - g.lane; sfx.flip(); }
+    else {
+      g.lane = (g.lane + 1) % NL;
+      if (g.lane === 0) {
+        const [x0, y0] = pos(g.ang, radiusAt(g.p, g.ang));
+        burst(x0, y0, trailColor(0), 8, 120, 1.6);
+        g.p = 0; g.hist.length = 0; sfx.warp();
+      } else sfx.flip();
+    }
+    g.lastSwitch = g.time;
+  }
+  function primary() {
+    if (state === 'play') hop();
+    else if (state === 'menu') launch();
+    else if (state === 'over' && clock - overAt > 0.55) launch();
+  }
+  function launch() {
+    if (save.mode === 'chart' && SYSTEMS[save.sel].need > totalStars()) { sfx.nope(); return; }
+    newGame(); state = 'play';
+    parts.length = 0; texts.length = 0; timeScale = 1;
+    panelWrap.hidden = true; hud.classList.remove('idle');
+    bestEl.textContent = g.best;
+    whereEl.textContent = (g.mode === 'daily' ? 'Daily · ' : '') + g.sys.name;
+    floatText(CX, CY - radiusAt(view.cfg.lanes - 1, 0) - 40 * S, g.sys.name, '#ffffff', true);
+    sfx.flip();
+  }
+  function goHome() {
+    state = 'menu'; showHome();
+  }
+  addEventListener('pointerdown', e => {
+    if (e.button > 0) return;
+    if (e.target.closest('button, summary, .panel')) return;
+    e.preventDefault();
+    primary();
+  }, { passive: false });
+  addEventListener('keydown', e => {
+    if (e.repeat) return;
+    const k = e.code;
+    if (k === 'Space' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'KeyW' || k === 'KeyS') { e.preventDefault(); primary(); }
+    else if (k === 'Enter' && !(e.target.closest && e.target.closest('button, summary'))) { e.preventDefault(); primary(); }
+    else if (k === 'Escape' && state === 'over') goHome();
+    else if (k === 'KeyM') toggleMute();
+  });
+
+  // ================= HUD & panels =================
+  const $ = id => document.getElementById(id);
+  const hud = $('hud'), scoreEl = $('score'), multEl = $('mult'), whereEl = $('where'), bestEl = $('best'), muteBtn = $('mute');
+  const panelWrap = $('panelWrap'), panel = $('panel');
+  function syncMute() { muteBtn.textContent = save.muted ? 'Sound off' : 'Sound on'; }
+  function toggleMute() { save.muted = !save.muted; persist(); syncMute(); }
+  muteBtn.addEventListener('click', toggleMute); syncMute();
+  let trailsOpen = false;
+
+  function rankHTML() {
+    const i = rankOf(save.life), next = RANKS[i + 1];
+    const pct = next ? Math.min(100, ((save.life - RANKS[i][1]) / (next[1] - RANKS[i][1])) * 100) : 100;
+    return `<div class="rank"><div class="rank-row"><span>Pilot rank <b>${RANKS[i][0]}</b></span>
+      <span>${next ? (next[1] - save.life).toLocaleString() + ' pts to ' + next[0] : 'Highest rank'}</span></div>
+      <div class="progress sol"><div style="width:${pct}%"></div></div></div>`;
+  }
+  function trailsHTML() {
+    const next = TRAILS.find(t => t.cost > save.bank);
+    let note;
+    if (next) {
+      const prev = [...TRAILS].reverse().find(t => t.cost <= save.bank);
+      const pct = Math.min(100, ((save.bank - prev.cost) / (next.cost - prev.cost)) * 100);
+      note = `<div class="progress"><div style="width:${pct}%"></div></div>
+        <div class="unlock-note"><b>${next.cost - save.bank}</b> more motes unlocks <b>${next.name}</b></div>`;
+    } else note = `<div class="unlock-note">Every trail unlocked. <b>${save.bank}</b> motes banked.</div>`;
+    const sw = TRAILS.map((t, i) => {
+      const locked = t.cost > save.bank;
+      const bg = t.col === 'prism' ? 'conic-gradient(#ff6b6b,#ffd36b,#9dff6a,#7fe3ff,#e48bff,#ff6b6b)' : t.col;
+      return `<button type="button" class="sw ${i === save.trail ? 'on' : ''} ${locked ? 'locked' : ''}" data-trail="${i}"
+        aria-label="${t.name} trail${locked ? ', locked, needs ' + t.cost + ' motes' : ''}"><i class="dot" style="background:${bg}"></i>${locked ? `<span>${t.cost}</span>` : ''}</button>`;
+    }).join('');
+    return `<details class="trails" ${trailsOpen ? 'open' : ''}><summary>Trail · ${TRAILS[save.trail].name}</summary>
+      <div class="trail-body"><div class="trail-row">${sw}</div>${note}</div></details>`;
+  }
+  function partsHTML() {
+    const st = totalStars();
+    const cur = PARTS.find(p => p.id === save.part);
+    const chips = PARTS.map(p => {
+      const locked = p.need > st;
+      return `<button type="button" class="part ${p.id === save.part ? 'on' : ''} ${locked ? 'locked' : ''}" data-part="${p.id}"
+        aria-label="${p.name}${locked ? ', needs ' + p.need + ' stars' : ''}">${locked ? '★' + p.need : p.name}</button>`;
+    }).join('');
+    return `<div class="parts"><div class="kicker">Ship part</div><div class="part-row">${chips}</div>
+      <div class="part-desc"><b style="color:var(--ink)">${cur.name}.</b> ${cur.desc}</div></div>`;
+  }
+
+  function chartHTML() {
+    const st = totalStars();
+    const i = save.sel, sys = SYSTEMS[i], ss = sysSave(i), locked = st < sys.need;
+    const nodes = SYSTEMS.map((s, j) => {
+      const lk = st < s.need, gs = sysSave(j).goals, all = gs.every(Boolean);
+      return `<button type="button" class="node ${j === i ? 'on' : ''} ${lk ? 'locked' : ''} ${all ? 'done' : ''}" data-sys="${j}"
+        aria-label="${s.name}${lk ? ', needs ' + s.need + ' stars' : ', ' + gs.filter(Boolean).length + ' of 3 stars'}">
+        <span class="n">${lk ? '★' + s.need : j + 1}</span><span class="pips">${gs.map(x => `<i class="${x ? 'got' : ''}"></i>`).join('')}</span></button>`;
+    }).join('');
+    return `<div class="chart">${nodes}</div>
+      <div class="sys">
+        <div class="sys-head"><h2>${sys.name}</h2><span class="kicker">${locked ? 'Uncharted' : 'Best ' + ss.best.toLocaleString()}</span></div>
+        <p>${sys.rule}</p>
+        ${locked ? `<p class="lockmsg">Earn <b>${sys.need - st}</b> more ${sys.need - st === 1 ? 'star' : 'stars'} to chart this system. You have ${st} of 21.</p>`
+          : `<ul class="goals">${sys.goals.map((gl, k) => `<li class="${ss.goals[k] ? 'done' : ''}"><i></i>${goalLabel(gl)}</li>`).join('')}</ul>`}
+      </div>
+      ${partsHTML()}`;
+  }
+  function dailyHTML() {
+    const dk = todayKey(), sys = SYSTEMS[dailySys(dk)];
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const k = dayKey(d);
+      days.push({ k, v: save.daily[k] || 0, label: d.toLocaleDateString(undefined, { weekday: 'narrow' }), today: i === 0 });
+    }
+    const max = Math.max(1, ...days.map(d => d.v));
+    const pretty = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return `<div class="sys">
+        <div class="sys-head"><h2>${sys.name}</h2><span class="kicker">${pretty}</span></div>
+        <p>${sys.rule}</p>
+        <p>Today’s course is fixed: the same rocks in the same order for everyone, on a standard ship. A new one arrives at midnight.</p>
+        <div class="bars" aria-label="Your daily scores for the last 7 days">${days.map(d =>
+          `<div class="bar ${d.today ? 'today' : ''}" title="${d.k}: ${d.v}"><div style="height:${(d.v / max) * 100}%"></div><small>${d.label}</small></div>`).join('')}</div>
+        <div class="sys-head"><span class="kicker">Today’s best</span><b>${(save.daily[dk] || 0).toLocaleString()}</b></div>
+      </div>`;
+  }
+
+  function showHome() {
+    hud.classList.add('idle');
+    const st = totalStars();
+    const locked = save.mode === 'chart' && SYSTEMS[save.sel].need > st;
+    panel.innerHTML = `
+      <h1>Peri<span>helion</span></h1>
+      ${rankHTML()}
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" class="tab ${save.mode === 'chart' ? 'on' : ''}" data-mode="chart" aria-selected="${save.mode === 'chart'}">Star chart · ${st}★</button>
+        <button type="button" role="tab" class="tab ${save.mode === 'daily' ? 'on' : ''}" data-mode="daily" aria-selected="${save.mode === 'daily'}">Daily orbit</button>
+      </div>
+      ${save.mode === 'chart' ? chartHTML() : dailyHTML()}
+      ${trailsHTML()}
+      <div class="btns"><button type="button" class="btn primary" id="launch" ${locked ? 'disabled' : ''}>${locked ? 'Uncharted' : 'Launch'}</button></div>
+      <div class="keys">Tap, click or Space to hop · M mutes</div>
+      ${installHTML()}`;
+    bindPanel();
+    panelWrap.hidden = false;
+  }
+
+  function showOver() {
+    hud.classList.add('idle');
+    const r = lastRun;
+    const notes = r.notes.map(n => `<div class="note">${n}</div>`).join('');
+    panel.innerHTML = `
+      <div class="kicker">${r.daily ? 'Daily orbit · ' : ''}${r.sysName} · Sector ${r.level}</div>
+      <div class="big">${r.score.toLocaleString()}</div>
+      ${r.beatBest ? '<span class="newbest">New best</span>' : `<div class="kicker">Best ${r.best.toLocaleString()}${r.best - r.score > 0 ? ' · ' + (r.best - r.score).toLocaleString() + ' to beat it' : ''}</div>`}
+      ${r.newGoals.length ? `<ul class="goals fresh">${r.newGoals.map(t => `<li>★ ${t}</li>`).join('')}</ul>` : ''}
+      <div class="stats">
+        <div class="stat"><b>${r.motes}</b><small>Motes</small></div>
+        <div class="stat"><b>${r.closes}</b><small>Close calls</small></div>
+        <div class="stat"><b>×${r.maxMult}</b><small>Top mult</small></div>
+      </div>
+      ${notes ? `<div class="notes">${notes}</div>` : ''}
+      ${!r.daily ? goalsLeftHTML(r.sysIndex) : ''}
+      ${rankHTML()}
+      <div class="btns two">
+        <button type="button" class="btn primary" id="again" disabled>Fly again</button>
+        <button type="button" class="btn" id="home">${r.daily ? 'Back' : 'Star chart'}</button>
+      </div>
+      ${r.daily ? '<button type="button" class="btn" id="share">Share today\u2019s score</button>' : ''}
+      <p>${r.tip}</p>`;
+    bindPanel();
+    panelWrap.hidden = false;
+    setTimeout(() => { const b = $('again'); if (b) b.disabled = false; }, 550);
+  }
+  function goalsLeftHTML(si) {
+    const sys = SYSTEMS[si], ss = sysSave(si);
+    if (ss.goals.every(Boolean)) return `<p>All three stars earned in <b>${sys.name}</b>.</p>`;
+    return `<div class="sys"><span class="kicker">${sys.name} goals</span><ul class="goals">${sys.goals.map((gl, k) =>
+      `<li class="${ss.goals[k] ? 'done' : ''}"><i></i>${goalLabel(gl)}</li>`).join('')}</ul></div>`;
+  }
+
+  function bindPanel() {
+    panel.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+      save.mode = b.dataset.mode; persist(); sfx.click(); showHome();
+    }));
+    panel.querySelectorAll('[data-sys]').forEach(b => b.addEventListener('click', () => {
+      save.sel = +b.dataset.sys; persist(); sfx.click(); showHome();
+    }));
+    panel.querySelectorAll('[data-part]').forEach(b => b.addEventListener('click', () => {
+      const p = PARTS.find(p => p.id === b.dataset.part);
+      if (p.need > totalStars()) { sfx.nope(); return; }
+      save.part = p.id; persist(); sfx.click(); showHome();
+    }));
+    panel.querySelectorAll('[data-trail]').forEach(b => b.addEventListener('click', () => {
+      const i = +b.dataset.trail;
+      if (TRAILS[i].cost > save.bank) { sfx.nope(); return; }
+      save.trail = i; persist(); sfx.click();
+      state === 'menu' ? showHome() : showOver();
+      const ag = $('again'); if (ag) ag.disabled = false;
+    }));
+    const det = panel.querySelector('details.trails');
+    if (det) det.addEventListener('toggle', () => { trailsOpen = det.open; });
+    const l = $('launch'); if (l) l.addEventListener('click', launch);
+    const a = $('again'); if (a) a.addEventListener('click', launch);
+    const h = $('home'); if (h) h.addEventListener('click', goHome);
+    const ins = $('install');
+    if (ins) ins.addEventListener('click', async () => {
+      if (!deferredInstall) return;
+      deferredInstall.prompt();
+      try { await deferredInstall.userChoice; } catch (e) {}
+      deferredInstall = null; showHome();
+    });
+    const sh = $('share'); if (sh) sh.addEventListener('click', () => shareDaily(sh));
+  }
+
+  // ================= app install, sharing, haptics =================
+  let deferredInstall = null;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; if (state === 'menu') showHome(); });
+  addEventListener('appinstalled', () => { deferredInstall = null; if (state === 'menu') showHome(); });
+  function installHTML() {
+    if (standalone) return '';
+    if (deferredInstall) return '<button type="button" class="btn" id="install">Install app</button>';
+    if (isIOS) return '<p class="install-hint">To install, tap <b>Share</b> in Safari, then <b>Add to Home Screen</b>.</p>';
+    return '';
+  }
+  function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
+  async function shareDaily(btn) {
+    const r = lastRun;
+    const text = `I scored ${r.score.toLocaleString()} on today\u2019s Perihelion daily orbit (${r.sysName}). Same course for everyone today. Can you beat it?`;
+    const url = location.href.split('#')[0].split('?')[0];
+    try {
+      if (navigator.share) { await navigator.share({ title: 'Perihelion', text, url }); return; }
+      await navigator.clipboard.writeText(text + ' ' + url);
+      btn.textContent = 'Copied. Paste it to a friend';
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      btn.textContent = 'Sharing isn\u2019t available here';
+    }
+  }
+
+  // ================= gameplay =================
+  function goalVal(gl) {
+    return { sector: g.level, motes: g.motes, closes: g.closes, streak: g.maxStreak, score: Math.floor(g.score) }[gl.t];
+  }
+  function checkGoals() {
+    if (g.mode !== 'chart') return;
+    const ss = sysSave(g.sysIndex);
+    g.sys.goals.forEach((gl, k) => {
+      if (!ss.goals[k] && goalVal(gl) >= gl.n) {
+        ss.goals[k] = true; persist();
+        g.newGoals.push(goalLabel(gl));
+        floatText(CX, CY + 46 * S, '★ ' + goalLabel(gl), '#ffb347');
+        sfx.goal(); flash = Math.max(flash, 0.12);
+      }
+    });
+  }
+
+  function die(x, y) {
+    state = 'dying'; overAt = clock; timeScale = 0.25;
+    burst(x, y, '#ff5d5d', 40, 260, 3); burst(x, y, trailColor(0), 30, 180, 2.5);
+    addShake(18); flash = 0.6; sfx.die(); buzz(40);
+    const final = Math.floor(g.score);
+    const notes = [];
+    save.bank += g.motes; save.runs++; save.life += final;
+    let beat = false, prevBest;
+    if (g.mode === 'daily') {
+      prevBest = save.daily[g.dayKey] || 0;
+      if (final > prevBest) { save.daily[g.dayKey] = final; beat = prevBest > 0 || final > 0; }
+    } else {
+      const ss = sysSave(g.sysIndex); prevBest = ss.best;
+      if (final > prevBest) { ss.best = final; beat = true; }
+    }
+    if (prevBest === 0) beat = false;
+    const starsAfter = totalStars();
+    SYSTEMS.forEach(s => { if (s.need > g.starsBefore && s.need <= starsAfter) notes.push(`New system charted: <b>${s.name}</b>`); });
+    PARTS.forEach(p => { if (p.need > g.starsBefore && p.need <= starsAfter) notes.push(`New ship part: <b>${p.name}</b>`); });
+    TRAILS.forEach(t => { if (t.cost > g.bankBefore && t.cost <= save.bank) notes.push(`New trail: <b>${t.name}</b>`); });
+    const rk = rankOf(save.life);
+    if (rk > g.rankBefore) notes.push(`Promoted to <b>${RANKS[rk][0]}</b>`);
+    persist();
+    lastRun = {
+      score: final, best: Math.max(prevBest, final), beatBest: beat, motes: g.motes, closes: g.closes, level: g.level, maxMult: g.maxMult,
+      daily: g.mode === 'daily', sysName: g.sys.name, sysIndex: g.sysIndex, newGoals: g.newGoals.slice(), notes,
+      tip: TIPS[Math.floor(Math.random() * TIPS.length)],
+    };
+    setTimeout(() => {
+      state = 'over'; overAt = clock; timeScale = 1;
+      showOver();
+      if (notes.length || beat) sfx.best();
+    }, 900);
+  }
+
+  function stepPlay(dt) {
+    g.time += dt;
+    g.w = Math.min(WMAX, 1.75 + g.time * 0.028) * g.spd;
+    const lvl = 1 + Math.floor(g.time / 16);
+    if (lvl > g.level) {
+      g.level = lvl; sfx.level();
+      floatText(CX, CY - radiusAt(g.cfg.lanes - 1, 0) - 34 * S, `Sector ${lvl}`, '#ffffff', true);
+      if (g.part === 'ballast' && !g.shield) { g.shield = true; floatText(CX, CY + 80 * S, 'Shield restored', '#ffb347'); }
+    }
+    if (g.invuln > 0) g.invuln -= dt;
+    if (g.cfg.retro) for (const o of g.objs) if (o.type === 'rock' && !o.done) o.a -= RETRO * dt;
+
+    while (g.cursor < g.ang + Math.PI * 1.55) spawnPattern();
+
+    const total = g.w * dt;
+    const steps = Math.max(1, Math.ceil(total / 0.025));
+    const da = total / steps, sdt = dt / steps;
+    for (let s = 0; s < steps && state === 'play'; s++) {
+      g.ang += da;
+      g.p += (g.lane - g.p) * Math.min(1, sdt * g.hopK);
+      g.score += sdt * g.w * 0.8;
+      collide();
+    }
+    g.objs = g.objs.filter(o => o.a - g.ang > -0.7 && o.pop < 1);
+    if (state !== 'play') return;
+    if (!g.beatBest && g.best > 0 && Math.floor(g.score) > g.best) {
+      g.beatBest = true; sfx.best();
+      floatText(CX, CY + radiusAt(g.cfg.lanes - 1, Math.PI) + 40 * S, 'New best!', '#ffb347', true);
+    }
+    checkGoals();
+  }
+
+  function collide() {
+    const [px, py] = pos(g.ang, radiusAt(g.p, g.ang));
+    const magnet = g.part === 'magnet';
+    for (const o of g.objs) {
+      if (o.done) continue;
+      const d = o.a - g.ang;
+      if (d > 0.5) continue;
+      const lp = o.type === 'comet' ? cometLp(o) : o.lane;
+      const rr = radiusAt(lp, o.a);
+      const arc = d * rr;
+      const near = Math.abs(g.p - lp);
+      if (o.type === 'rock' || o.type === 'comet') {
+        const hit = (o.type === 'comet' ? 13 : 15) * S * (magnet ? 1.3 : 1);
+        if (Math.abs(arc) < hit && near < 0.32 && g.invuln <= 0) {
+          o.done = true; o.pop = 0.01;
+          const [ox, oy] = pos(o.a, rr);
+          if (g.shield) {
+            g.shield = false; g.invuln = 0.4; sfx.shield(); addShake(8);
+            burst(ox, oy, '#ffb347', 26, 200); floatText(ox, oy - 20 * S, 'Shield broke', '#ffb347');
+          } else { die(px, py); return; }
+        } else if (arc < -hit * 1.3) {
+          o.done = true;
+          if (o.type === 'rock' && g.time - g.lastSwitch < 0.2 && g.fromLane === o.lane && g.lane !== o.lane) {
+            g.closes++;
+            const pts = 25 * g.mult; g.score += pts; sfx.close();
+            const [ox, oy] = pos(o.a, rr);
+            floatText(ox, oy, `Close +${pts}`, '#ff8a8a'); addShake(3);
+          }
+        }
+      } else {
+        const hit = 20 * S;
+        if (Math.abs(arc) < hit && (near < 0.45 || (magnet && o.type === 'mote'))) {
+          o.done = true; o.pop = 0.01;
+          const [ox, oy] = pos(o.a, rr);
+          if (o.type === 'star') {
+            g.shield = true; sfx.star(); burst(ox, oy, '#ffb347', 22, 160);
+            floatText(ox, oy - 18 * S, 'Shield', '#ffb347'); flash = 0.15;
+          } else {
+            g.streak++; g.motes++; g.maxStreak = Math.max(g.maxStreak, g.streak);
+            const m = Math.min(8 + (g.baseMult - 1), g.baseMult + Math.floor(g.streak / 6));
+            if (m > g.mult) {
+              floatText(CX, CY, `×${m}`, '#ffb347', true); addShake(4);
+              multEl.classList.add('hot'); setTimeout(() => multEl.classList.remove('hot'), 400);
+            }
+            g.mult = m; g.maxMult = Math.max(g.maxMult, m);
+            const pts = 10 * g.mult; g.score += pts;
+            sfx.mote(g.streak % 15);
+            burst(ox, oy, '#7fe3ff', 7, 90, 1.8);
+            if (g.streak % 6 === 0) floatText(ox, oy - 16 * S, `+${pts}`, '#7fe3ff');
+          }
+        } else if (arc < -hit) {
+          o.done = true;
+          if (o.type === 'mote' && g.streak > 0) {
+            if (g.mult > g.baseMult) { const [ox, oy] = pos(o.a, rr); floatText(ox, oy, 'Streak lost', '#a49cc7'); sfx.lost(); }
+            g.streak = 0; g.mult = g.baseMult;
+          }
+        }
+      }
+    }
+  }
+
+  function stepFx(dt) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]; p.life += dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96;
+      if (p.life > p.max) parts.splice(i, 1);
+    }
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i]; t.life += dt; t.y -= dt * 28 * S;
+      if (t.life > (t.big ? 1.3 : 1.1)) texts.splice(i, 1);
+    }
+    shake *= Math.pow(0.002, dt);
+    flash = Math.max(0, flash - dt * 1.5);
+  }
+
+  // ================= draw =================
+  const eclipseAt = () => clock * 0.12;
+  function eclipseFactor(a) {
+    if (!view.cfg.eclipse) return 1;
+    let d = ((a - eclipseAt()) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+    d = Math.abs(d);
+    return d < 0.6 ? 0.03 : d < 0.85 ? 0.03 + (d - 0.6) / 0.25 * 0.97 : 1;
+  }
+
+  function draw(showGame) {
+    const level = showGame ? g.level : 1;
+    const hue = (view.hue + (level - 1) * 26) % 360;
+    const NL = view.cfg.lanes;
+    ctx.save();
+    ctx.fillStyle = '#0a0918'; ctx.fillRect(0, 0, W, H);
+    const bgG = ctx.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * 0.7);
+    bgG.addColorStop(0, `hsla(${hue} 60% 22% / .9)`); bgG.addColorStop(1, 'hsla(250 50% 5% / 0)');
+    ctx.fillStyle = bgG; ctx.fillRect(0, 0, W, H);
+    if (shake > 0.3) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+    const span = Math.hypot(W, H) * 0.55;
+    ctx.fillStyle = '#e8e2ff';
+    for (const s of stars) {
+      const a = s.a + clock * 0.01;
+      ctx.globalAlpha = 0.35 + 0.35 * Math.sin(clock * 1.5 + s.tw);
+      ctx.fillRect(CX + Math.cos(a) * s.d * span, CY + Math.sin(a) * s.d * span, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+
+    // sun (binary in braided systems)
+    const mult = showGame ? g.mult : 1;
+    const sunR = (22 + mult * 2.2 + Math.sin(clock * 3) * 1.2) * S;
+    const suns = view.cfg.braid ? [0, Math.PI].map(o => [CX + Math.cos(clock * 1.4 + o) * 15 * S, CY + Math.sin(clock * 1.4 + o) * 15 * S, 0.72]) : [[CX, CY, 1]];
+    for (const [sx, sy, k] of suns) {
+      const R = sunR * k;
+      const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, R * 3.4);
+      sg.addColorStop(0, 'rgba(255,220,150,1)'); sg.addColorStop(0.28, 'rgba(255,179,71,.85)');
+      sg.addColorStop(0.55, `hsla(${(hue + 120) % 360} 90% 55% / .18)`); sg.addColorStop(1, 'rgba(255,120,60,0)');
+      ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, R * 3.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff3d6'; ctx.beginPath(); ctx.arc(sx, sy, R * 0.75, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // orbits
+    const P = showGame ? g : demo;
+    for (let l = 0; l < NL; l++) {
+      const active = Math.max(0, 1 - Math.abs(P.p - l));
+      ctx.strokeStyle = `hsla(${hue} 80% 85% / ${0.12 + active * 0.24})`;
+      ctx.lineWidth = (1 + active * 1.2) * S + 0.5;
+      ctx.setLineDash(l % 2 === 0 ? [] : [2 * S + 1, 7 * S]);
+      ctx.beginPath();
+      if (view.cfg.braid) {
+        for (let i = 0; i <= 180; i++) { const a = (i / 180) * Math.PI * 2; const [x, y] = pos(a, laneR(l, a)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      } else ctx.arc(CX, CY, laneR(l, 0), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // objects
+    if (showGame) {
+      for (const o of g.objs) {
+        const d = o.a - g.ang;
+        let alpha = Math.max(0, Math.min(1, (Math.PI * 1.55 - d) / 0.9));
+        if (o.done && !o.pop) alpha *= Math.max(0, 1 + d * 2);
+        if (o.pop) { o.pop += 0.08; alpha *= 1 - o.pop; }
+        alpha *= eclipseFactor(o.a);
+        if (alpha <= 0.01) continue;
+        ctx.globalAlpha = alpha;
+        const sc = o.pop ? 1 + o.pop * 1.4 : 1;
+        if (o.type === 'comet') { drawComet(o, d, sc); continue; }
+        const [x, y] = pos(o.a, laneR(o.lane, o.a));
+        if (o.type === 'mote') drawMote(x, y, o.spin + clock * 3, sc);
+        else if (o.type === 'rock') drawRock(x, y, o.spin + clock * 0.8, sc);
+        else drawStar(x, y, clock * 2, sc);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // eclipse shadow
+    if (view.cfg.eclipse) {
+      const e = eclipseAt() - Math.PI / 2;
+      const rOut = laneR(NL - 1, 0) + 60 * S;
+      const eg = ctx.createRadialGradient(CX, CY, 30 * S, CX, CY, rOut);
+      eg.addColorStop(0, 'rgba(6,5,14,0)'); eg.addColorStop(0.25, 'rgba(6,5,14,.82)'); eg.addColorStop(1, 'rgba(6,5,14,0)');
+      ctx.fillStyle = eg;
+      ctx.beginPath(); ctx.moveTo(CX, CY); ctx.arc(CX, CY, rOut, e - 0.72, e + 0.72); ctx.closePath(); ctx.fill();
+    }
+
+    // player
+    if (state !== 'dying' && !(state === 'over' && showGame)) {
+      const [px, py] = pos(P.ang, radiusAt(P.p, P.ang));
+      P.hist.push([px, py]); if (P.hist.length > 22) P.hist.shift();
+      ctx.lineCap = 'round';
+      for (let i = 1; i < P.hist.length; i++) {
+        const k = i / P.hist.length;
+        ctx.strokeStyle = trailColor(i); ctx.globalAlpha = k * 0.85;
+        ctx.lineWidth = k * 7 * S + 0.5;
+        ctx.beginPath(); ctx.moveTo(P.hist[i - 1][0], P.hist[i - 1][1]); ctx.lineTo(P.hist[i][0], P.hist[i][1]); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      const glow = ctx.createRadialGradient(px, py, 0, px, py, 20 * S);
+      glow.addColorStop(0, 'rgba(255,255,255,.9)'); glow.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(px, py, 20 * S, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px, py, 6.5 * S, 0, Math.PI * 2); ctx.fill();
+      if (showGame && g.shield) {
+        ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 2 * S + 0.5; ctx.globalAlpha = 0.6 + 0.3 * Math.sin(clock * 8);
+        ctx.beginPath(); ctx.arc(px, py, 14 * S, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+      if (showGame && g.part === 'magnet') {
+        ctx.strokeStyle = 'rgba(127,227,255,.25)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(px, py, 22 * S + Math.sin(clock * 5) * 2, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    for (const p of parts) {
+      ctx.globalAlpha = 1 - p.life / p.max; ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * S + 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const t of texts) {
+      const life = t.big ? 1.3 : 1.1, k = t.life / life;
+      ctx.globalAlpha = k < 0.15 ? k / 0.15 : 1 - Math.max(0, (k - 0.6) / 0.4);
+      const sz = (t.big ? 30 : 14) * S + (t.big ? 8 : 6);
+      const pop = t.big ? 1 + Math.max(0, 0.3 - t.life) * 1.5 : 1;
+      ctx.font = `${t.big ? '400' : '600'} ${sz * pop}px ${t.big ? '"Tilt Warp", sans-serif' : '"Martian Mono", monospace'}`;
+      ctx.fillStyle = t.col; ctx.fillText(t.text, t.x, t.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    if (flash > 0) { ctx.fillStyle = `rgba(255,240,220,${flash * 0.5})`; ctx.fillRect(0, 0, W, H); }
+  }
+
+  function drawMote(x, y, rot, sc) {
+    const s = 6 * S * sc + 1;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = 'rgba(127,227,255,.22)'; ctx.beginPath(); ctx.arc(0, 0, s * 2.1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7fe3ff';
+    ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  function drawRock(x, y, rot, sc) {
+    const s = 10 * S * sc + 1;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = 'rgba(255,93,93,.18)'; ctx.beginPath(); ctx.arc(0, 0, s * 1.9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff5d5d'; ctx.strokeStyle = '#ffd0c4'; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2, r = s * (i % 2 ? 0.72 : 1.05);
+      i ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+  function drawStar(x, y, rot, sc) {
+    const s = 10 * S * sc + 1;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = 'rgba(255,179,71,.25)'; ctx.beginPath(); ctx.arc(0, 0, s * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffb347'; ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2, r = i % 2 ? s * 0.45 : s;
+      i ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  function drawComet(o, d, sc) {
+    const NL = view.cfg.lanes;
+    const a0 = ctx.globalAlpha;
+    // flight path telegraph
+    const [ix, iy] = pos(o.a, laneR(0, o.a) - 26 * S), [ox, oy] = pos(o.a, laneR(NL - 1, o.a) + 40 * S);
+    ctx.strokeStyle = 'rgba(255,200,160,.35)'; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
+    ctx.globalAlpha = a0 * 0.8; ctx.beginPath(); ctx.moveTo(ix, iy); ctx.lineTo(ox, oy); ctx.stroke(); ctx.setLineDash([]);
+    const lp = cometLp(o);
+    if (lp > NL + 1.6 || lp < -1.2) { ctx.globalAlpha = a0; return; }
+    const r = radiusAt(lp, o.a), rt = radiusAt(lp + 0.9, o.a);
+    const [x, y] = pos(o.a, r), [tx, ty] = pos(o.a, rt);
+    ctx.globalAlpha = a0;
+    const tg = ctx.createLinearGradient(x, y, tx, ty);
+    tg.addColorStop(0, 'rgba(255,214,170,.9)'); tg.addColorStop(1, 'rgba(255,120,80,0)');
+    ctx.strokeStyle = tg; ctx.lineWidth = 9 * S * sc + 1; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,140,90,.3)'; ctx.beginPath(); ctx.arc(x, y, 15 * S * sc, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff1e0'; ctx.beginPath(); ctx.arc(x, y, 6.5 * S * sc + 1, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // ================= loop =================
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    clock += dt;
+    const sdt = dt * timeScale;
+    const showGame = state === 'play' || state === 'dying';
+    if (state === 'play') stepPlay(sdt);
+    if (!showGame) {
+      const si = selectedSystem();
+      view = { cfg: SYSTEMS[si].cfg, hue: SYSTEMS[si].hue };
+      const NL = view.cfg.lanes;
+      if (demo.lane >= NL) { demo.lane = 0; demo.p = 0; }
+      demo.ang += sdt * 1.2;
+      demo.nextFlip -= sdt;
+      if (demo.nextFlip <= 0) {
+        demo.lane = (demo.lane + 1) % NL;
+        if (demo.lane === 0 && NL > 2) { demo.p = 0; demo.hist.length = 0; }
+        demo.nextFlip = 0.8 + Math.random() * 1.4;
+      }
+      demo.p += (demo.lane - demo.p) * Math.min(1, sdt * 14);
+    }
+    stepFx(sdt);
+    if (showGame) {
+      scoreEl.textContent = Math.floor(g.score).toLocaleString();
+      multEl.textContent = '×' + g.mult;
+      whereEl.textContent = (g.mode === 'daily' ? 'Daily · ' : '') + g.sys.name + ' · Sector ' + g.level;
+    }
+    draw(showGame);
+    requestAnimationFrame(frame);
+  }
+
+  showHome();
+  requestAnimationFrame(frame);
+})();
+</script>
+
+<script>
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>
