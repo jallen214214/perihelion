@@ -36,6 +36,16 @@ html, body { height: 100%; }
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; font-size: 14px; overscroll-behavior: none; }
 .install-hint { font-size: 11px; }
+.revive-bar { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.revive-bar div { height: 100%; width: 100%; background: var(--sol); }
+.ad-overlay {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+  background: rgba(5, 4, 12, 0.94);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.ad-box { width: min(340px, 100%); display: flex; flex-direction: column; gap: 12px; text-align: center; border: 1px dashed var(--line-2); border-radius: 16px; padding: 24px 20px; }
+.ad-box p { margin: 0; color: var(--ink-dim); font-size: 12px; line-height: 1.6; }
 [hidden] { display: none !important; }
 body {
   background: var(--void);
@@ -206,6 +216,8 @@ details.trails[open] summary::after { content: "–"; }
     <button class="icon-btn" id="mute" type="button">Sound on</button>
   </div>
 </div>
+
+<div class="ad-overlay" id="adOverlay" hidden></div>
 
 <div class="panel-wrap" id="panelWrap">
   <div class="panel" id="panel"></div>
@@ -505,6 +517,7 @@ details.trails[open] summary::after { content: "–"; }
     if (k === 'Space' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'KeyW' || k === 'KeyS') { e.preventDefault(); primary(); }
     else if (k === 'Enter' && !(e.target.closest && e.target.closest('button, summary'))) { e.preventDefault(); primary(); }
     else if (k === 'Escape' && state === 'over') goHome();
+    else if (k === 'Escape' && state === 'revive') declineRevive();
     else if (k === 'KeyM') toggleMute();
   });
 
@@ -626,6 +639,7 @@ details.trails[open] summary::after { content: "–"; }
         <div class="stat"><b>${r.closes}</b><small>Close calls</small></div>
         <div class="stat"><b>×${r.maxMult}</b><small>Top mult</small></div>
       </div>
+      ${!r.doubled && r.motes > 0 && Ads.rewardedReady() ? `<button type="button" class="btn" id="double">Watch ad to double motes (+${r.motes})</button>` : ''}
       ${notes ? `<div class="notes">${notes}</div>` : ''}
       ${!r.daily ? goalsLeftHTML(r.sysIndex) : ''}
       ${rankHTML()}
@@ -678,6 +692,64 @@ details.trails[open] summary::after { content: "–"; }
       deferredInstall = null; showHome();
     });
     const sh = $('share'); if (sh) sh.addEventListener('click', () => shareDaily(sh));
+    const dbl = $('double');
+    if (dbl) dbl.addEventListener('click', async () => {
+      dbl.disabled = true; state = 'ad'; adOverGame = false;
+      const ok = await Ads.showRewarded('double-motes');
+      state = 'over'; overAt = clock;
+      if (ok && !lastRun.doubled) {
+        const before = save.bank;
+        save.bank += lastRun.motes; lastRun.doubled = true;
+        lastRun.notes.push(`Motes doubled: <b>+${lastRun.motes}</b> banked toward trails`);
+        TRAILS.forEach(t => { if (t.cost > before && t.cost <= save.bank) lastRun.notes.push(`New trail: <b>${t.name}</b>`); });
+        persist(); sfx.goal();
+      }
+      showOver();
+      const ag = $('again'); if (ag) ag.disabled = false;
+    });
+  }
+
+  // ================= ads =================
+  // Connect a real ad network by defining, before this script runs:
+  //   window.PerihelionAds = {
+  //     isRewardedReady() { return true; },                 // optional: hide offers when no ad is loaded
+  //     showRewarded(placement) { return Promise<boolean>; } // resolve true only if the player earned the reward
+  //   };
+  // Placements: 'revive' and 'double-motes'. Add ?ads=test to the URL to try the flow with a fake ad.
+  const AD_TEST = new URLSearchParams(location.search).get('ads') === 'test';
+  const Ads = {
+    rewardedReady() {
+      const net = window.PerihelionAds;
+      if (net && typeof net.showRewarded === 'function') {
+        try { return typeof net.isRewardedReady === 'function' ? !!net.isRewardedReady() : true; } catch (e) { return false; }
+      }
+      return AD_TEST;
+    },
+    async showRewarded(placement) {
+      const wasRunning = ac && ac.state === 'running';
+      if (wasRunning) { try { await ac.suspend(); } catch (e) {} }
+      let ok = false;
+      try {
+        const net = window.PerihelionAds;
+        if (net && typeof net.showRewarded === 'function') ok = !!(await net.showRewarded(placement));
+        else if (AD_TEST) ok = await testAd(placement);
+      } catch (e) { ok = false; }
+      if (wasRunning) { try { await ac.resume(); } catch (e) {} }
+      return ok;
+    },
+  };
+  function testAd(placement) {
+    return new Promise(resolve => {
+      const el = $('adOverlay');
+      let n = 3;
+      el.innerHTML = `<div class="ad-box"><div class="kicker">Test ad · ${placement}</div><div class="big" id="adCount">${n}</div>
+        <p>A real ad network would play a short video here.</p>
+        <button type="button" class="btn" id="adSkip">Close without reward</button></div>`;
+      el.hidden = false;
+      const done = ok => { clearInterval(iv); el.hidden = true; resolve(ok); };
+      const iv = setInterval(() => { n--; const c = $('adCount'); if (c) c.textContent = n; if (n <= 0) done(true); }, 1000);
+      $('adSkip').addEventListener('click', () => done(false));
+    });
   }
 
   // ================= app install, sharing, haptics =================
@@ -728,6 +800,53 @@ details.trails[open] summary::after { content: "–"; }
     state = 'dying'; overAt = clock; timeScale = 0.25;
     burst(x, y, '#ff5d5d', 40, 260, 3); burst(x, y, trailColor(0), 30, 180, 2.5);
     addShake(18); flash = 0.6; sfx.die(); buzz(40);
+    setTimeout(() => {
+      // One continue per run, star chart only (the daily course stays fair), and not for instant crashes.
+      if (g.mode === 'chart' && !g.revived && g.time > 5 && Ads.rewardedReady()) showRevive();
+      else finishRun();
+    }, 900);
+  }
+
+  let reviveTimer = null, adOverGame = false;
+  function showRevive() {
+    state = 'revive'; timeScale = 1;
+    const secs = 6;
+    panel.innerHTML = `
+      <div class="kicker">${g.sys.name} · Sector ${g.level}</div>
+      <h2>Continue this run?</h2>
+      <div class="big">${Math.floor(g.score).toLocaleString()}</div>
+      <p>Watch a short ad to pick up where you crashed, with a shield. One continue per run.</p>
+      <div class="revive-bar"><div id="reviveBar"></div></div>
+      <div class="btns">
+        <button type="button" class="btn primary" id="revive">Watch ad to continue</button>
+        <button type="button" class="btn" id="decline">No thanks</button>
+      </div>`;
+    panelWrap.hidden = false;
+    const bar = $('reviveBar');
+    setTimeout(() => { bar.style.transition = `width ${secs}s linear`; bar.style.width = '0%'; }, 30);
+    reviveTimer = setTimeout(declineRevive, secs * 1000);
+    $('revive').addEventListener('click', acceptRevive);
+    $('decline').addEventListener('click', declineRevive);
+  }
+  function declineRevive() {
+    if (state !== 'revive') return;
+    clearTimeout(reviveTimer);
+    finishRun();
+  }
+  async function acceptRevive() {
+    if (state !== 'revive') return;
+    clearTimeout(reviveTimer);
+    state = 'ad'; adOverGame = true; panelWrap.hidden = true;
+    const ok = await Ads.showRewarded('revive');
+    if (!ok) { finishRun(); return; }
+    g.revived = true; g.shield = true; g.invuln = 1.2;
+    // clear the hazards right in front of the spark so the restart is fair
+    for (const o of g.objs) if (!o.done && (o.type === 'rock' || o.type === 'comet') && o.a - g.ang < 1.0) { o.done = true; o.pop = 0.01; }
+    state = 'play'; timeScale = 1; hud.classList.remove('idle');
+    floatText(CX, CY, 'Back in orbit', '#ffb347', true); sfx.star();
+  }
+
+  function finishRun() {
     const final = Math.floor(g.score);
     const notes = [];
     save.bank += g.motes; save.runs++; save.life += final;
@@ -750,13 +869,11 @@ details.trails[open] summary::after { content: "–"; }
     lastRun = {
       score: final, best: Math.max(prevBest, final), beatBest: beat, motes: g.motes, closes: g.closes, level: g.level, maxMult: g.maxMult,
       daily: g.mode === 'daily', sysName: g.sys.name, sysIndex: g.sysIndex, newGoals: g.newGoals.slice(), notes,
-      tip: TIPS[Math.floor(Math.random() * TIPS.length)],
+      tip: TIPS[Math.floor(Math.random() * TIPS.length)], doubled: false,
     };
-    setTimeout(() => {
-      state = 'over'; overAt = clock; timeScale = 1;
-      showOver();
-      if (notes.length || beat) sfx.best();
-    }, 900);
+    state = 'over'; overAt = clock; timeScale = 1;
+    showOver();
+    if (notes.length || beat) sfx.best();
   }
 
   function stepPlay(dt) {
@@ -1058,7 +1175,7 @@ details.trails[open] summary::after { content: "–"; }
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     clock += dt;
     const sdt = dt * timeScale;
-    const showGame = state === 'play' || state === 'dying';
+    const showGame = state === 'play' || state === 'dying' || state === 'revive' || (state === 'ad' && adOverGame);
     if (state === 'play') stepPlay(sdt);
     if (!showGame) {
       const si = selectedSystem();

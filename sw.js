@@ -1,6 +1,6 @@
 // Offline support for Perihelion.
 // Bump VERSION whenever you change any file, so installed copies pick up the update.
-const VERSION = 'perihelion-v1';
+const VERSION = 'perihelion-v2';
 const CORE = [
   './',
   './index.html',
